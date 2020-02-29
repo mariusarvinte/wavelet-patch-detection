@@ -13,26 +13,17 @@ from tensorflow import keras
 from keras.utils import to_categorical
 from keras.datasets import cifar10
 
-from setup_cifar import VGG19Model
-
 from matplotlib import pyplot as plt
 plt.ioff()
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve, auc
 
-from cleverhans.attacks import FastGradientMethod
-from cleverhans.attacks import ProjectedGradientDescent
-from cleverhans.attacks import PatchProjectedGradientDescent
-from cleverhans.utils_keras import vgg19_model
+from aux_models import vgg19_model, detector_model
 from cleverhans.utils_keras import KerasModelWrapper
-from cleverhans.utils_keras import detector_model
 
-from aux_evaluation import get_residual, attack_images
-from aux_evaluation import train_classifier, evaluate_classifier
-from aux_evaluation import gaussian_patch_images
-
-from aux_residual_classifier import ResidueClassifier
+from aux_evaluation import get_residual
+from aux_evaluation import evaluate_classifier
 
 from tqdm import tqdm
 import hdf5storage
@@ -65,14 +56,6 @@ class_name = {
     8: 'ship',
     9: 'truck',
 }
-
-# Connected part
-num_fc_layers = 1
-hidden_fc_dim = [64, None, None, None, None, 256, 10]
-# General
-weight_reg   = 0.0005
-common_layer = 'relu'
-output_layer = 'softmax'
 
 # Load CIFAR-10
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
@@ -143,15 +126,15 @@ adversaries = dict()
 for test_threat in test_threat_range:
     # Folder and filenames
     if test_threat == 'black':
-        test_folder = 'results_blackbox_strong'
+        test_folder = 'results'
         test_name = 'cifarVgg19_CWblackbox_restricted'
         target_name = 'y_target'
     elif test_threat == 'gray':
-        test_folder = 'results_graybox_strong'
+        test_folder = 'results'
         test_name = 'cifarVgg19_CWgraybox_restricted'
         target_name = 'y_target_joint'
     elif test_threat == 'white':
-        test_folder = 'results_whitebox_strong'
+        test_folder = 'results'
         test_name = 'cifarVgg19_CWwhitebox_unrestricted'
         target_name = 'y_target_joint'
         

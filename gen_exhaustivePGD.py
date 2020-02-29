@@ -13,23 +13,16 @@ from tensorflow import keras
 from keras.utils import to_categorical
 from keras.datasets import cifar10
 
-from setup_cifar import VGG19Model
-
 from matplotlib import pyplot as plt
 plt.ioff()
 
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_curve
 
-from cleverhans.attacks import FastGradientMethod
-from cleverhans.attacks import ProjectedGradientDescent
-from cleverhans.attacks import PatchProjectedGradientDescent
-from cleverhans.utils_keras import vgg19_model
+from aux_attacks import PatchProjectedGradientDescent
+from aux_models import vgg19_model
 from cleverhans.utils_keras import KerasModelWrapper
 
-from aux_evaluation import get_residual, attack_images
-from aux_evaluation import train_classifier, evaluate_classifier
-from aux_evaluation import gaussian_patch_images
+from aux_evaluation import attack_images
 
 import hdf5storage
 
@@ -62,14 +55,6 @@ class_name = {
     9: 'truck',
 }
 
-# Connected part
-num_fc_layers = 1
-hidden_fc_dim = [64, None, None, None, None, 256, 10]
-# General
-weight_reg   = 0.0005
-common_layer = 'relu'
-output_layer = 'softmax'
-
 # Load CIFAR-10
 (x_train, y_train), (x_test, y_test) = cifar10.load_data()
 # Normalize
@@ -100,12 +85,6 @@ x_test  = np.clip(x_test, boxmin, boxmax)
 
 # Weights
 weight_path  = 'models/weights_clean_best.h5'
-model_path   = 'models/H_cifar_sketch_info.mat'
-shadow_model = VGG19Model(input_h, input_w, input_c, output_dim,
-                          num_fc_layers, hidden_fc_dim, common_layer,
-                          output_layer, weight_reg, local_seed=0,
-                          restore=weight_path, model_path=model_path,
-                          input_tensor=None, verbose=False)
 # Boxes
 boxmin = (0. - train_mean) / (train_std + 1e-7)
 boxmax = (255. - train_mean) / (train_std + 1e-7)
@@ -135,7 +114,7 @@ wrap = KerasModelWrapper(model)
 batch_size  = 256
 num_batches = 16
 # Find correctly classified data
-y_hat = shadow_model.encoder.predict(x_val)
+y_hat = model.predict(x_val)
 valid_idx = np.where(np.argmax(y_hat, axis=-1) == np.argmax(y_val, axis=-1))
 x_valid = x_val[valid_idx]
 y_valid = y_val[valid_idx]
@@ -162,7 +141,7 @@ elif target_data == 'test':
     y_input = y_test
 
 # Where to save
-save_dir = 'cifar10_vgg19CORRECTED_blackbox_samples'
+save_dir = 'cifar10_blackbox_samples'
 
 # Masking parameters - fixed size for this, covering approximately 2%
 min_size = [5, 5]
@@ -184,10 +163,10 @@ cornerx = cornerx.flatten()
 cornery = cornery.flatten()
 
 # Meta-attack type
-attack_type     = 'pgd'
-attack_order    = np.inf
+attack_type   = 'pgd'
+attack_order  = np.inf
 attack_strength_range = [8, 16, 64, 255]
-attack_masked   = True
+attack_masked = True
 
 # Success rate
 success_rate = []
@@ -199,29 +178,18 @@ for attack_strength in attack_strength_range:
     else:
         attack_step = 5.
     
-    # Create universal attack object
-    if attack_type == 'fgsm':
-        attack = FastGradientMethod(wrap, sess=sess)
-        fgsm_params = {'eps': attack_strength / 255. * (boxmax - boxmin),
-                           'clip_min': boxmin,
-                           'clip_max': boxmax,
-                           'ord': attack_order,
-                           'masked': attack_masked,
-                           'mask': mask_tensor}
-        adv_x = attack.generate(x, **fgsm_params)
-        adv_x = tf.stop_gradient(adv_x)
-    elif attack_type == 'pgd':
-        attack = PatchProjectedGradientDescent(wrap, sess=sess)
-        pgd_params = {'eps': attack_strength / 255. * (boxmax - boxmin),
-                      'eps_iter': attack_step / 255. * (boxmax - boxmin),
-                      'clip_min': boxmin,
-                      'clip_max': boxmax,
-                      'nb_iter': 100,
-                      'rand_init': True,
-                      'mask': mask_tensor,
-                      'ord': attack_order}
-        adv_x = attack.generate(x, **pgd_params)
-        adv_x = tf.stop_gradient(adv_x)
+    # Create attack object
+    attack = PatchProjectedGradientDescent(wrap, sess=sess)
+    pgd_params = {'eps': attack_strength / 255. * (boxmax - boxmin),
+                  'eps_iter': attack_step / 255. * (boxmax - boxmin),
+                  'clip_min': boxmin,
+                  'clip_max': boxmax,
+                  'nb_iter': 100,
+                  'rand_init': True,
+                  'mask': mask_tensor,
+                  'ord': attack_order}
+    adv_x = attack.generate(x, **pgd_params)
+    adv_x = tf.stop_gradient(adv_x)
     
     # Measure attack success
     success_percentage = 0
@@ -243,7 +211,7 @@ for attack_strength in attack_strength_range:
                                 attack, mask_tensor, mask)
         
         # Check success and downselect
-        y_hat = shadow_model.encoder.predict(val_adv)
+        y_hat = model.predict(val_adv)
         success_idx = np.where(np.argmax(y_hat, axis=-1) != np.argmax(local_labels, axis=-1))
         # Record success percentage
         success_percentage += len(success_idx) / batch_size
@@ -254,12 +222,8 @@ for attack_strength in attack_strength_range:
     success_rate.append(success_percentage/num_batches)
     
     # Save to .mat file
-    if attack_type == 'fgsm':
-        savefile = save_dir + '/exhaustive_mask%d_%s_%s_strength%d.mat' % (min_size[0], attack_type,
-                                                               target_data, attack_strength)
-    elif attack_type == 'pgd':
-        savefile = save_dir + '/exhaustive_mask%d_%s_%s_strength%d_step%.2f.mat' % (min_size[0], attack_type,
-                                                                        target_data, attack_strength, attack_step)
+    savefile = save_dir + '/exhaustive_mask%d_%s_%s_strength%d_step%.2f.mat' % (min_size[0], attack_type,
+                                                                    target_data, attack_strength, attack_step)
     hdf5storage.savemat(savefile,
                         {'x_adv_val': x_adv_val,
                          'x_clean_val': x_input,
@@ -267,5 +231,3 @@ for attack_strength in attack_strength_range:
                          'random_idx': random_idx,
                          'success_percentage': success_percentage},
                          truncate_existing=True)
-# Save success rate to file
-success_rate = np.asarray(success_rate)
